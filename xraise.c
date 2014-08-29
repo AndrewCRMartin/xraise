@@ -13,48 +13,54 @@
 
 #include <X11/Xlib.h>
 
-#define XDO_ERROR 1
-#define XDO_SUCCESS 0
+#define ERROR 1
+#define OK    0
 
-#define XDO_FIND_PARENTS (0)
-#define XDO_FIND_CHILDREN (1)
+#define FIND_PARENTS (0)
+#define FIND_CHILDREN (1)
 
-int xdo_get_mouse_location2(Display *dpy, int *x_ret, int *y_ret,
-                            int *screen_num_ret, Window *window_ret);
-int xdo_find_window_client(Display *dpy, Window window, Window *window_ret,
-                           int direction);
-int _is_success(const char *funcname, int code);
-void _xdo_debug(const char *format, ...) ;
-int xdo_get_window_property(Display *dpy, Window window, const char *property,
-                            unsigned char **value, long *nitems, Atom *type, int *size);
-unsigned char *xdo_get_window_property_by_atom(Display *dpy, Window window, Atom atom,
-                                               long *nitems, Atom *type, int *size);
+typedef unsigned long ULONG;
+typedef unsigned char UCHAR;
+typedef unsigned int  UINT;
 
+int GetMouseLocation(Display *display, int *x_ret, int *y_ret,
+                     int *screen_num_ret, Window *window_ret);
+int FindClientWindow(Display *display, Window window, 
+                     Window *window_ret, int direction);
+void Debug(const char *format, ...) ;
+int GetWindowProperty(Display *display, Window window, 
+                            const char *property, UCHAR **value,
+                            long *nitems, Atom *type, int *size);
+UCHAR *GetWindowPropertyByAtom(Display *display, Window window,
+                                       Atom atom, long *nitems, 
+                                       Atom *type, int *size);
 
-
-
+/***********************************************************************/
 int main(int argc, char **argv)
 {
    int x, y, screen_num;
    Window window;
-   Display *dpy;
-   char *display;
+   Display *display;
+   char *displayName;
 
-   if((display = getenv("DISPLAY"))==NULL)
+   if((displayName = getenv("DISPLAY"))==NULL)
    {
-      dpy = XOpenDisplay(":0");
+      display = XOpenDisplay(":0");
    }
    else
    {
-      dpy = XOpenDisplay(getenv("DISPLAY"));
+      display = XOpenDisplay(displayName);
    }
 
-   if(!xdo_get_mouse_location2(dpy, &x, &y, &screen_num, &window))
+   if(!GetMouseLocation(display, &x, &y, &screen_num, &window))
    {
-      /*   printf("x:%d y:%d screen:%d window:%ld\n", ret, x, y, screen_num, window); */
+#if (DEBUG > 3)
+      printf("x:%d y:%d screen:%d window:%ld\n", 
+             x, y, screen_num, window);
+#endif
       if(strstr(argv[0], "lower"))
       {
-         if(!XLowerWindow(dpy, window))
+         if(!XLowerWindow(display, window))
          {
             fprintf(stderr, "XRaiseWindow error?\n");
             exit(1);
@@ -62,214 +68,278 @@ int main(int argc, char **argv)
       }
       else
       {
-         if(!XRaiseWindow(dpy, window))
+         if(!XRaiseWindow(display, window))
          {
             fprintf(stderr, "XRaiseWindow error?\n");
             exit(1);
          }
       }
    }
-   XCloseDisplay(dpy);
+   XCloseDisplay(display);
 
    return(0);
 }
 
 
-int xdo_get_mouse_location2(Display *dpy, int *x_ret, int *y_ret,
-                            int *screen_num_ret, Window *window_ret) 
+/***********************************************************************/
+int FindClientWindow(Display *display, Window window, 
+                     Window *window_ret, int direction) 
 {
-  int ret = False;
-  int x = 0, y = 0, screen_num = 0;
-  int i = 0;
-  Window window = 0;
-  Window root = 0;
-  int dummy_int = 0;
-  unsigned int dummy_uint = 0;
-  int screencount = ScreenCount(dpy);
-
-  for (i = 0; i < screencount; i++) {
-    Screen *screen = ScreenOfDisplay(dpy, i);
-    ret = XQueryPointer(dpy, RootWindowOfScreen(screen),
-                        &root, &window,
-                        &x, &y, &dummy_int, &dummy_int, &dummy_uint);
-    if (ret == True) {
-      screen_num = i;
-      break;
-    }
-  }
-
-  if (window_ret != NULL) {
-    /* Find the client window if we are not root. */
-    if (window != root && window != 0) {
-      int findret;
-      Window client = 0;
-
-      /* Search up the stack for a client window for this window */
-      findret = xdo_find_window_client(dpy, window, &client, XDO_FIND_PARENTS);
-      if (findret == XDO_ERROR) {
-        /* If no client found, search down the stack */
-        findret = xdo_find_window_client(dpy, window, &client, XDO_FIND_CHILDREN);
+   Window dummy, parent, *children = NULL;
+   UINT nchildren;
+   Atom atom_wmstate = XInternAtom(display, "WM_STATE", False);
+   
+   int done = False;
+   long items;
+   
+   while (!done) 
+   {
+      if (window == 0) 
+      {
+         return ERROR;
       }
-      /*fprintf(stderr, "%ld, %ld, %ld, %d\n", window, root, client, findret);*/
-      if (findret == XDO_SUCCESS) {
-        window = client;
-      }
-    } else {
-      window = root;
-    }
-  }
-  /*printf("mouseloc root: %ld\n", root);*/
-  /*printf("mouseloc window: %ld\n", window);*/
-
-  if (ret == True) {
-    if (x_ret != NULL) *x_ret = x;
-    if (y_ret != NULL) *y_ret = y;
-    if (screen_num_ret != NULL) *screen_num_ret = screen_num;
-    if (window_ret != NULL) *window_ret = window;
-  }
-
-  return _is_success("XQueryPointer", ret == False);
-}
-
-int xdo_find_window_client(Display *dpy, Window window, Window *window_ret,
-                           int direction) 
-{
-  /* for XQueryTree */
-  Window dummy, parent, *children = NULL;
-  unsigned int nchildren;
-  Atom atom_wmstate = XInternAtom(dpy, "WM_STATE", False);
-
-  int done = False;
-  long items;
-
-
-  while (!done) {
-    if (window == 0) {
-      return XDO_ERROR;
-    }
-
-    _xdo_debug("get_window_property on %lu", window);
-    xdo_get_window_property_by_atom(dpy, window, atom_wmstate, &items, NULL, NULL);
-
-    if (items == 0) {
-      /* This window doesn't have WM_STATE property, keep searching. */
-      _xdo_debug("window %lu has no WM_STATE property, digging more.", window);
-      XQueryTree(dpy, window, &dummy, &parent, &children, &nchildren);
-
-      if (direction == XDO_FIND_PARENTS) {
-        _xdo_debug("searching parents");
-        /* Don't care about the children, but we still need to free them */
-        if (children != NULL)
-          XFree(children);
-        window = parent;
-      } else if (direction == XDO_FIND_CHILDREN) {
-        unsigned int i = 0;
-        int ret;
-        _xdo_debug("searching %d children", nchildren);
-
-        done = True; /* recursion should end us */
-        for (i = 0; i < nchildren; i++) {
-          ret = xdo_find_window_client(dpy, children[i], &window, direction);
-          /*fprintf(stderr, "findclient: %ld\n", window);*/
-          if (ret == XDO_SUCCESS) {
-            *window_ret = window;
-            break;
-          }
-        }
-        if (nchildren == 0) {
-          return XDO_ERROR;
-        }
-        if (children != NULL)
-          XFree(children);
-      } else {
-        fprintf(stderr, "Invalid find_client direction (%d)\n", direction);
-        *window_ret = 0;
-        if (children != NULL)
-          XFree(children);
-        return XDO_ERROR;
-      }
-    } else {
-      *window_ret = window;
-      done = True;
-    }
-  }
-  return XDO_SUCCESS;
-}
-
-int _is_success(const char *funcname, int code)
-{
-  /* Nonzero is failure. */
-   if (code != 0)
-    fprintf(stderr, "%s failed (code=%d)\n", funcname, code);
-  return code;
-}
-
-void _xdo_debug(const char *format, ...) 
-{
-  va_list args;
-
-  va_start(args, format);
-#ifdef DEBUG
-  vfprintf(stderr, format, args);
-  fprintf(stderr, "\n");
+      
+      Debug("get_window_property on %lu", window);
+      GetWindowPropertyByAtom(display, window, atom_wmstate, 
+                              &items, NULL, NULL);
+      
+      if (items == 0) 
+      {
+         /* This window doesn't have WM_STATE property, 
+            keep searching. 
+         */
+         Debug("window %lu has no WM_STATE property, digging more.", 
+               window);
+         XQueryTree(display, window, &dummy, &parent, 
+                    &children, &nchildren);
+         
+         if (direction == FIND_PARENTS) 
+         {
+            Debug("searching parents");
+            /* Don't care about the children, 
+               but we still need to free them 
+            */
+            if (children != NULL)
+               XFree(children);
+            window = parent;
+         } 
+         else if (direction == FIND_CHILDREN) 
+         {
+            UINT i = 0;
+            int ret;
+            Debug("searching %d children", nchildren);
+            
+            done = True; /* recursion should end us */
+            for (i = 0; i < nchildren; i++) 
+            {
+               ret = FindClientWindow(display, children[i], 
+                                      &window, direction);
+#if (DEBUG > 3)
+               fprintf(stderr, "findclient: %ld\n", window);
 #endif
-} /* _xdo_debug */
-
-int xdo_get_window_property(Display *dpy, Window window, const char *property,
-                            unsigned char **value, long *nitems, Atom *type, int *size) {
-    *value = xdo_get_window_property_by_atom(dpy, window, XInternAtom(dpy, property, False), nitems, type, size);
-    if (*value == NULL) {
-        return XDO_ERROR;
-    }
-    return XDO_SUCCESS;
+               if (ret == OK) 
+               {
+                  *window_ret = window;
+                  break;
+               }
+            }
+            if (nchildren == 0) 
+            {
+               return ERROR;
+            }
+            if (children != NULL)
+               XFree(children);
+         } 
+         else 
+         {
+            fprintf(stderr, "Invalid find_client direction (%d)\n", 
+                    direction);
+            *window_ret = 0;
+            if (children != NULL)
+               XFree(children);
+            return ERROR;
+         }
+      } 
+      else 
+      {
+         *window_ret = window;
+         done = True;
+      }
+   }
+   return OK;
 }
 
+/***********************************************************************/
+void Debug(const char *format, ...) 
+{
+   va_list args;
+   va_start(args, format);
+
+#if DEBUG > 2
+   vfprintf(stderr, format, args);
+   fprintf(stderr, "\n");
+#endif
+}
+
+/***********************************************************************/
+int GetWindowProperty(Display *display, Window window, 
+                      const char *property,
+                      UCHAR **value, long *nitems, 
+                      Atom *type, int *size) 
+{
+   *value = GetWindowPropertyByAtom(display, window, 
+                                    XInternAtom(display,property,False),
+                                    nitems, type, size);
+   if (*value == NULL) 
+   {
+      return ERROR;
+   }
+   return OK;
+}
+
+/***********************************************************************/
 /* Arbitrary window property retrieval
  * slightly modified version from xprop.c from Xorg */
-unsigned char *xdo_get_window_property_by_atom(Display *dpy, Window window, Atom atom,
-                                            long *nitems, Atom *type, int *size) {
-  Atom actual_type;
-  int actual_format;
-  unsigned long _nitems;
-  /*unsigned long nbytes;*/
-  unsigned long bytes_after; /* unused */
-  unsigned char *prop;
-  int status;
+UCHAR *GetWindowPropertyByAtom(Display *display, Window window, 
+                               Atom atom, long *nitems, 
+                               Atom *type, int *size) 
+{
+   Atom actual_type;
+   int actual_format;
+   ULONG _nitems;
+   /*ULONG nbytes;*/
+   ULONG bytes_after; /* unused */
+   UCHAR *prop;
+   int status;
+   
+   status = XGetWindowProperty(display, window, atom, 0, (~0L),
+                               False, AnyPropertyType, &actual_type,
+                               &actual_format, &_nitems, &bytes_after,
+                               &prop);
+   if (status == BadWindow) 
+   {
+      fprintf(stderr, "window id # 0x%lx does not exists!", window);
+      return NULL;
+   }
+   if (status != Success) 
+   {
+      fprintf(stderr, "XGetWindowProperty failed!");
+      return NULL;
+   }
+   
+   /*
+    *if (actual_format == 32)
+    *  nbytes = sizeof(long);
+    *else if (actual_format == 16)
+    *  nbytes = sizeof(short);
+    *else if (actual_format == 8)
+    *  nbytes = 1;
+    *else if (actual_format == 0)
+    *  nbytes = 0;
+    */
+   
+   if (nitems != NULL) 
+   {
+      *nitems = _nitems;
+   }
+   
+   if (type != NULL) 
+   {
+      *type = actual_type;
+   }
+   
+   if (size != NULL) 
+   {
+      *size = actual_format;
+   }
+   return prop;
+}
 
-  status = XGetWindowProperty(dpy, window, atom, 0, (~0L),
-                              False, AnyPropertyType, &actual_type,
-                              &actual_format, &_nitems, &bytes_after,
-                              &prop);
-  if (status == BadWindow) {
-    fprintf(stderr, "window id # 0x%lx does not exists!", window);
-    return NULL;
-  } if (status != Success) {
-    fprintf(stderr, "XGetWindowProperty failed!");
-    return NULL;
-  }
+/***********************************************************************/
+int GetMouseLocation(Display *display, int *x_ret, int *y_ret,
+                     int *screen_num_ret, Window *window_ret) 
+{
+   int ret        = False,
+       rootX      = 0, 
+       rootY      = 0, 
+       windowX    = 0,
+       windowY    = 0,
+       screen_num = 0,
+       i          = 0;
+   Window window = 0,
+          rootWindow = 0;
+   UINT mask = 0;
+   int screencount = ScreenCount(display);
+   
+   /* Step through the screens associated with this display */
+   for (i = 0; i < screencount; i++) 
+   {
+      Screen *screen = ScreenOfDisplay(display, i);
 
-  /*
-   *if (actual_format == 32)
-   *  nbytes = sizeof(long);
-   *else if (actual_format == 16)
-   *  nbytes = sizeof(short);
-   *else if (actual_format == 8)
-   *  nbytes = 1;
-   *else if (actual_format == 0)
-   *  nbytes = 0;
-   */
+      /* If the pointer is on this screen we get the info for the 
+         pointer, store the screen number and break out of the loop
+       */
+      if((ret=XQueryPointer(display, RootWindowOfScreen(screen),
+                            &rootWindow, &window,
+                            &rootX, &rootY, 
+                            &windowX, &windowY, &mask))==True)
+      {
+         screen_num = i;
+         break;
+      }
+   }
+   
+   /* If the caller is requesting the window number... */
+   if (window_ret != NULL) 
+   {
+      /* If it's not the root window, find the client window */
+      if ((window != rootWindow) && (window != 0))
+      {
+         int findret;
+         Window clientWindow = 0;
+         
+         /* Search up the stack for a client window for this window */
+         findret = FindClientWindow(display, window, 
+                                    &clientWindow, FIND_PARENTS);
+         if (findret == ERROR) 
+         {
+            /* If no client found, search down the stack */
+            findret = FindClientWindow(display, window, 
+                                       &clientWindow, FIND_CHILDREN);
+         }
+#ifdef DEBUG
+         fprintf(stderr, "Window: %ld, Root window: %ld, \
+Client Window: %ld, Return: %d\n",
+                 window, rootWindow, clientWindow, findret);
+#endif
+         if (findret == OK) 
+         {
+            window = clientWindow;
+         }
+      } 
+      else 
+      {
+         window = rootWindow;
+      }
+   }
+#if (DEBUG > 3)
+   printf("mouseloc root: %ld\n", rootWindow);
+   printf("mouseloc window: %ld\n", window);
+#endif
+   
+   if (ret == True) 
+   {
+      if (x_ret != NULL) *x_ret = rootX;
+      if (y_ret != NULL) *y_ret = rootY;
+      if (screen_num_ret != NULL) *screen_num_ret = screen_num;
+      if (window_ret != NULL) *window_ret = window;
+   }
+   else
+   {
+      fprintf(stderr, "XQueryPointer() failed\n");
+      return(ERROR);
+   }
 
-  if (nitems != NULL) {
-    *nitems = _nitems;
-  }
-
-  if (type != NULL) {
-    *type = actual_type;
-  }
-
-  if (size != NULL) {
-    *size = actual_format;
-  }
-  return prop;
+   return(OK);
 }
 
